@@ -9,5 +9,6 @@ public class CollectorInfo {
     private String collectorId;
     private String collectorName;
     private String collectorHost;
+    private String collectorPort;
     private String installPath;
 }
