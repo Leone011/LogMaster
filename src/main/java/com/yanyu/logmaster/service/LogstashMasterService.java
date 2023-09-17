@@ -1,11 +1,13 @@
 package com.yanyu.logmaster.service;
 
 
+import com.yanyu.logmaster.entity.CollectorInfo;
 
 public interface LogstashMasterService {
     void start(String collectorId);
     void stop();
     String getStatus();
 
-    String test();
+
+    void create(CollectorInfo collectorInfo);
 }
