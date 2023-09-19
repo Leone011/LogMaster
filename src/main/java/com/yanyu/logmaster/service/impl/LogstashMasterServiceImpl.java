@@ -1,8 +1,5 @@
 package com.yanyu.logmaster.service.impl;
 
-import com.jcraft.jsch.ChannelExec;
-import com.jcraft.jsch.JSch;
-import com.jcraft.jsch.Session;
 import com.yanyu.logmaster.entity.CollectorInfo;
 import com.yanyu.logmaster.service.LogstashMasterService;
 import com.yanyu.logmaster.utils.SshUtils;
@@ -10,7 +7,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.io.*;
+import java.io.IOException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+
 
 
 @Service
@@ -26,138 +29,85 @@ public class LogstashMasterServiceImpl implements LogstashMasterService {
     private SshUtils sshUtils;
 
 
-    /**
-     * 1. local -> remote
-     *
-     * @param collectorInfo {
-     *                      "collectorId": "1",
-     *                      "collectorName": "test",
-     *                      "collectorIp": "hadoop101",
-     *                      "installPath": "/opt/module/logstash"
-     *                      }
-     *                      默认ssh端口号为22
-     *                      本地和远端用户相同且免密
-     */
     @Override
-    public void create(CollectorInfo collectorInfo) {
-        // 1. 发送安装包和认证文件到host上
-        String collectorHost = collectorInfo.getCollectorHost();
-        String collectorInfoInstallPath = collectorInfo.getInstallPath();
+    public String start(CollectorInfo collectorInfo) {
+        // 获取logstash安装路径
+        String logstashInstallPath = collectorInfo.getInstallPath();
+        // 获取logstash配置文件目录
+        String logstashConfigDir = collectorInfo.getConfDir();
 
-        // 构建创建目标文件夹命令
-        String createDirCommand = "mkdir -p " + collectorInfoInstallPath;
-
-        // 构建 SCP 命令
-        // 校验本地文件路径是否存在
-
-        String scpCommand = "scp " + logstashPackagePath + " " + collectorInfoInstallPath + "/logstash.tar.gz";
-
-        try {
-            // 执行创建目标文件夹命令
-            String createDirResult = sshUtils.executeCommand(collectorHost, createDirCommand);
-
-            // 处理创建目标文件夹的结果
-            if (createDirResult.isEmpty()) {
-                System.out.println("Target directory created successfully.");
-            } else {
-                System.out.println("Failed to create target directory. Result: " + createDirResult);
-            }
-
-            // 执行 SCP 命令
-            String result = sshUtils.executeCommand(collectorHost, scpCommand);
-
-            // 处理结果
-            if (result.isEmpty()) {
-                System.out.println("File copied successfully.");
-            } else {
-                System.out.println("File copy failed. Result: " + result);
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-            // 处理异常
-        }
-
-        // 3. 解压安装包，配置采集器的监控端口
-        // 构建tar解压命令
-        String unzipCommand = "tar -zxvf " + collectorInfoInstallPath + "/logstash.tar.gz -C " + collectorInfoInstallPath;
-
-
-        try {
-            // 执行解压命令
-            String unzipResult = sshUtils.executeCommand(collectorHost, unzipCommand);
-
-            // 处理解压结果
-            if (unzipResult.isEmpty()) {
-                System.out.println("Logstash package unzipped successfully.");
-            } else {
-                System.out.println("Failed to unzip Logstash package. Result: " + unzipResult);
-            }
-
-            // 配置采集器的监控端口，替换配置文件中的占位符
-            // 获取Logstash的版本号，可以根据实际情况从安装包名称中提取
-            String configFilePath = collectorInfoInstallPath + "/logstash-" + logstashVersion + "/config/logstash.yml";
-            String logstashPort = collectorInfo.getCollectorPort(); // 用您的Logstash端口替换这里
-
-            // 读取配置文件
-            BufferedReader reader = new BufferedReader(new FileReader(configFilePath));
-            StringBuilder configFileContent = new StringBuilder();
-            String line;
-
-            while ((line = reader.readLine()) != null) {
-                // 替换占位符
-                if (line.contains("api.http.port:")) {
-                    line = "api.http.port: " + logstashPort;
-                }
-                configFileContent.append(line).append("\n");
-            }
-            reader.close();
-
-            // 将更新后的配置写回文件
-            BufferedWriter writer = new BufferedWriter(new FileWriter(configFilePath));
-            writer.write(configFileContent.toString());
-            writer.close();
-
-            System.out.println("Logstash port configured successfully.");
-        } catch (Exception e) {
-            e.printStackTrace();
-            // 处理异常
-        }
-
-        //
-
-        // 4. 初始化 collector_id.conf 文件
-
-
-        // 测试
-        // 构建检查文件存在性的命令
-        String checkCommand = "test -e " + collectorInfo.getInstallPath() + "/collector_+" + collectorInfo.getCollectorId() + ".conf";
-
-        String result = sshUtils.executeCommand(collectorInfo.getCollectorHost(), checkCommand);
-
-        // 检查结果
-        if (result.isEmpty()) {
-            System.out.println("collector_id.conf does not exist.");
+        /* 获取logstash配置文件名
+         * 1. 解析请求参数是否存在配置文件名称
+         * - 存在
+         *  confName = collectorInfo.getInfo
+         * - 不存在
+         *  默认值：agent_<collectorInfo.getCollectorId>.conf
+         *
+         */
+        String confName;
+        if (collectorInfo.getConfName() != null && !collectorInfo.getConfName().isEmpty()) {
+            confName = collectorInfo.getConfName();
         } else {
-            System.out.println("collector_id.conf exists.");
+            confName = "agent_" + collectorInfo.getCollectorId() + ".conf";
+        }
+        String configFileFullPath = logstashConfigDir + "/" + confName;
+        // 构建start执行命令
+        String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
+        String logFilename = logstashInstallPath + "/job_log/agent_" + collectorInfo.getCollectorId() + "_" + timestamp + ".log";
+        String pidFile = logstashInstallPath + "/log/agent_" + collectorInfo.getCollectorId() + "_pid.txt";
+        String startCommand = String.format("nohup %s/bin/logstash -f %s > %s 2>&1 & echo $! > %s",
+                logstashInstallPath, configFileFullPath, logFilename, pidFile);
+
+        // Execute the command
+        sshUtils.executeCommand(collectorInfo.getCollectorHost(), startCommand);
+
+        // "ps aux | grep '[l]ogstash -f %s' | awk '{print $2}'"
+        // Read the pid from the pid file
+        String pid = sshUtils.executeCommand(collectorInfo.getCollectorHost(),"cat " + pidFile);
+        return pid.trim(); // Return the PID
+    }
+
+    @Override
+    public void stop(CollectorInfo collectorInfo) {
+        // 获取logstash安装路径
+        String logstashInstallPath = collectorInfo.getInstallPath();
+        // 获取logstash配置文件目录
+        String logstashConfigDir = collectorInfo.getConfDir();
+    }
+
+
+    @Override
+    public void update(CollectorInfo collectorInfo) {
+
+    }
+
+    @Override
+    public String check(CollectorInfo collectorInfo) {
+        // Write the config content to a temporary file
+        String logstashInstallPath = collectorInfo.getInstallPath();
+        String tempConfigFilePath = logstashInstallPath + "/tmp/temp_logstash_config.conf";
+
+
+        // Step 1: Append the config content to the remote file
+        String escapedConfigContent = collectorInfo.getConfContent().replace("$", "\\$").replace("\"", "\\\"");  // Escape some special characters
+        String appendToFileCommand = String.format("echo \"%s\" > %s", escapedConfigContent, tempConfigFilePath);
+        sshUtils.executeCommand(collectorInfo.getCollectorHost(), appendToFileCommand);
+
+        // Step 2: Use Logstash on the remote node to validate the configuration
+        String validationCommand = String.format("%s/bin/logstash --config.test_and_exit -f %s", logstashInstallPath, tempConfigFilePath);
+
+        // Execute the validation command on the remote node
+        String output = sshUtils.executeCommand(collectorInfo.getCollectorHost(), validationCommand);
+
+        // Step 3: Optionally, delete the temp file on the remote node
+        String deleteCommand = String.format("rm %s", tempConfigFilePath);
+        sshUtils.executeCommand(collectorInfo.getCollectorHost(), deleteCommand);
+
+        if (output.contains("Configuration OK")) {
+            return "Configuration is valid.";
+        } else {
+            // Extract error details from output or just return a generic error message
+            return "Configuration validation failed. Details: " + output;
         }
     }
-
-    @Override
-    public void start(String collectorId) {
-        // 根据采集器id从pg数据库中配置文件路径
-
-//        executeCommand(LOGSTASH_START_COMMAND);
-    }
-
-    @Override
-    public void stop() {
-//        executeCommand(LOGSTASH_STOP_COMMAND);
-    }
-
-    @Override
-    public String getStatus() {
-//        return executeCommand(LOGSTASH_STATUS_COMMAND);
-        return "1";
-    }
-
 }

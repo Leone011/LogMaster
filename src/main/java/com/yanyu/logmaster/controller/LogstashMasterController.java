@@ -14,22 +14,29 @@ public class LogstashMasterController {
     private LogstashMasterService logstashService;
 
 
-    @PostMapping("/create")
-    public ResponseEntity<String> createCollector(@RequestBody CollectorInfo collectorInfo) {
-        logstashService.create(collectorInfo);
-        return ResponseEntity.ok("Collector created successfully for collector with ID: " + collectorInfo.getCollectorId());
-    }
 
     @PostMapping("/start")
-    public ResponseEntity<String> startLogstash(@RequestParam String collectorId) {
-        logstashService.start(collectorId);
-        return ResponseEntity.ok("Collector start successfully for collector with ID: " + collectorId);
+    public ResponseEntity<String> startLogstash(@RequestBody CollectorInfo collectorInfo) {
+        String pid = logstashService.start(collectorInfo);
+        return ResponseEntity.ok("Collector start successfully");
     }
 
     @PostMapping("/stop")
-    public ResponseEntity<String> stopLogstash() {
-        logstashService.stop();
+    public ResponseEntity<String> stopLogstash(@RequestBody CollectorInfo collectorInfo) {
+        logstashService.stop(collectorInfo);
         return ResponseEntity.ok("Logstash stopped successfully");
+    }
+
+    @PostMapping("/update")
+    public ResponseEntity<String> updateLogstash(@RequestBody CollectorInfo collectorInfo) {
+        logstashService.update(collectorInfo);
+        return ResponseEntity.ok("");
+    }
+
+    @PostMapping("/check")
+    public ResponseEntity<String> checkLogstash(@RequestBody CollectorInfo collectorInfo) {
+        String check = logstashService.check(collectorInfo);
+        return ResponseEntity.ok(check);
     }
 
 }
